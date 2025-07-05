@@ -1,4 +1,4 @@
-# Create AWS Infrastructure with Terraform
+# Create AWS Infrastructure with Terraform (Step by Step guidance)
 
 This repository contains Terraform code to provision a comprehensive AWS environment. It demonstrates how to create a custom Virtual Private Cloud (VPC), launch an EC2 instance within it, and set up an S3 bucket. This guide provides a detailed, step-by-step explanation of the entire process.
 
