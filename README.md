@@ -1,19 +1,34 @@
-# Create an AWS EC2 Instance with a new VPC using Terraform
+# Create AWS Infrastructure with Terraform
 
-This Terraform configuration provisions a complete AWS environment including a new VPC, public and private subnets, an Internet Gateway, and then launches an EC2 instance within one of the public subnets. It also creates an S3 bucket as part of the infrastructure.
+This repository contains Terraform code to provision a comprehensive AWS environment. It demonstrates how to create a custom Virtual Private Cloud (VPC), launch an EC2 instance within it, and set up an S3 bucket. This guide provides a detailed, step-by-step explanation of the entire process.
+
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [How to Use](#how-to-use)
+- [Detailed Infrastructure Breakdown](#detailed-infrastructure-breakdown)
+  - [1. AWS Provider Configuration](#1-aws-provider-configuration)
+  - [2. Creating a Custom VPC](#2-creating-a-custom-vpc)
+  - [3. Setting up Subnets](#3-setting-up-subnets)
+  - [4. Internet Gateway and Routing](#4-internet-gateway-and-routing)
+  - [5. Launching an EC2 Instance](#5-launching-an-ec2-instance)
+  - [6. Creating an S3 Bucket](#6-creating-an-s3-bucket)
+- [Customization (Variables)](#customization-variables)
+- [Outputs](#outputs)
+- [Destroying the Infrastructure](#destroying-the-infrastructure)
 
 ## Prerequisites
 
-Before you begin, ensure you have the following installed and configured:
+Before you begin, ensure you have the following:
 
-1.  **Terraform**: [Download and install Terraform](https://learn.hashicorp.com/tutorials/terraform/install-cli).
-2.  **AWS Account**: You will need an active AWS account.
-3.  **AWS CLI**: [Install and configure the AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html) with your credentials.
-4.  **EC2 Key Pair**: You must have an existing EC2 Key Pair in the target AWS region. You will need to provide the name of this key pair in the `variables.tf` file or as an input variable.
+1.  **Terraform**: [Install Terraform](https://learn.hashicorp.com/tutorials/terraform/install-cli).
+2.  **AWS Account**: An active AWS account.
+3.  **AWS CLI**: [Install and configure the AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html) with your access credentials.
+4.  **EC2 Key Pair**: An existing EC2 Key Pair in your target AWS region. The name of this key pair is required for SSH access to the EC2 instance.
 
 ## How to Use
 
-1.  **Clone the Repository (or download the files)**
+1.  **Clone the Repository**
 
     ```bash
     git clone <your-repository-url>
@@ -22,15 +37,15 @@ Before you begin, ensure you have the following installed and configured:
 
 2.  **Initialize Terraform**
 
-    This command initializes the working directory, downloading the necessary provider plugins.
+    This command prepares your working directory for Terraform.
 
     ```bash
     terraform init
     ```
 
-3.  **Review the Plan**
+3.  **Review the Execution Plan**
 
-    This command shows you what resources Terraform will create, modify, or destroy.
+    See what resources Terraform will create before making any changes.
 
     ```bash
     terraform plan
@@ -38,43 +53,171 @@ Before you begin, ensure you have the following installed and configured:
 
 4.  **Apply the Configuration**
 
-    This command applies the changes and builds the infrastructure on AWS.
+    This command builds the resources on AWS.
 
     ```bash
     terraform apply
     ```
 
-    You will be prompted to confirm the action. Type `yes` to proceed.
+    Confirm the action by typing `yes` when prompted.
 
-5.  **Destroy the Infrastructure**
+## Detailed Infrastructure Breakdown
 
-    When you no longer need the resources, you can destroy them to avoid incurring further charges.
+### 1. AWS Provider Configuration
 
-    ```bash
-    terraform destroy
-    ```
+This block configures the AWS provider, specifying the region where all the resources will be created. The region is sourced from a variable for easy customization.
 
-## Configuration Details
+```terraform
+provider "aws" {
+    region = var.avability_zone
+}
+```
 
-### Input Variables (`variables.tf`)
+### 2. Creating a Custom VPC
 
-You can customize the deployment by modifying the `variables.tf` file or by passing variables via the command line (`-var="key_name=my-key"`).
+A Virtual Private Cloud (VPC) is a logically isolated section of the AWS Cloud where you can launch AWS resources. We define a VPC with a specific CIDR block, which provides a private network space.
+
+```terraform
+resource "aws_vpc" "my_vpc" {
+  cidr_block = "10.0.0.0/16"
+
+  tags = {
+    Name = "Demo VPC"
+  }
+}
+```
+
+### 3. Setting up Subnets
+
+Subnets are subdivisions of your VPC. We create both public and private subnets across multiple Availability Zones (AZs) for high availability.
+
+-   **Public Subnets**: These subnets have a route to the internet.
+-   **Private Subnets**: These subnets are for resources that shouldn't be directly accessible from the internet.
+
+```terraform
+# Public Subnets
+resource "aws_subnet" "public_subnet" {
+  vpc_id            = aws_vpc.my_vpc.id
+  count             = length(var.public_subnet_cidrs)
+  cidr_block        = element(var.public_subnet_cidrs, count.index)
+  availability_zone = element(var.azs, count.index)
+
+  tags = {
+    Name = "Public Subnet ${count.index + 1}"
+  }
+}
+
+# Private Subnets
+resource "aws_subnet" "private_subnet" {
+  vpc_id            = aws_vpc.my_vpc.id
+  count             = length(var.private_subnet_cidrs)
+  cidr_block        = element(var.private_subnet_cidrs, count.index)
+  availability_zone = element(var.azs, count.index)
+
+  tags = {
+    Name = "Private Subnet ${count.index + 1}"
+  }
+}
+```
+
+### 4. Internet Gateway and Routing
+
+To allow communication between instances in your VPC and the internet, you need an Internet Gateway and a Route Table.
+
+-   **Internet Gateway (IGW)**: Provides a target in your VPC route tables for internet-routable traffic.
+-   **Route Table**: Contains a set of rules, called routes, that determine where network traffic is directed.
+-   **Route Table Association**: Connects the route table to our public subnets.
+
+```terraform
+# Internet Gateway
+resource "aws_internet_gateway" "ig" {
+  vpc_id = aws_vpc.my_vpc.id
+
+  tags = {
+    Name = "Demo VPC ig"
+  }
+}
+
+# Route Table
+resource "aws_route_table" "second_rt" {
+  vpc_id = aws_vpc.my_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.ig.id
+  }
+
+  tags = {
+    Name = "2nd Round Table"
+  }
+}
+
+# Route Table Association
+resource "aws_route_table_association" "public_subnet_asso" {
+  count          = length(var.public_subnet_cidrs)
+  route_table_id = aws_route_table.second_rt.id
+  subnet_id      = element(aws_subnet.public_subnet[*].id, count.index)
+}
+```
+
+### 5. Launching an EC2 Instance
+
+This is the virtual server. We launch it into one of our public subnets and associate it with a key pair to allow for SSH access.
+
+```terraform
+resource "aws_instance" "my_instance" {
+    ami           = var.ami
+    instance_type = var.instance_type
+    key_name      = var.key_name
+    subnet_id     = aws_subnet.public_subnet[0].id
+
+    tags = {
+        Name = "Demo-instance"
+    }
+}
+```
+
+### 6. Creating an S3 Bucket
+
+Amazon S3 is an object storage service. This code creates a new, globally unique S3 bucket.
+
+```terraform
+resource "aws_s3_bucket" "my_bucket" {
+    bucket = "terraform-bucket-0007"
+
+    tags = {
+        Name = "Demo bucket"
+    }
+}
+```
+
+## Customization (Variables)
+
+You can modify the `variables.tf` file to change the configuration without altering the main code.
 
 | Variable               | Description                                       | Default Value                               |
 | ---------------------- | ------------------------------------------------- | ------------------------------------------- |
-| `avability_zone`       | The AWS region where resources will be created.   | `"us-east-2"`                               |
-| `ami`                  | The Amazon Machine Image (AMI) ID for the EC2 instance. | `"ami-0d1b5a8c13042c939"` (Amazon Linux 2) |
-| `instance_type`        | The type of EC2 instance to launch.               | `"t2.micro"`                                |
-| `public_subnet_cidrs`  | A list of CIDR blocks for the public subnets.     | `["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]` |
-| `private_subnet_cidrs` | A list of CIDR blocks for the private subnets.    | `["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]` |
-| `azs`                  | A list of Availability Zones for the subnets.     | `["us-east-2a", "us-east-2b", "us-east-2c"]`  |
-| `key_name`             | The name of your EC2 Key Pair for SSH access.     | `"terraform-key"`                           |
+| `avability_zone`       | The AWS region for resource creation.             | `"us-east-2"`                               |
+| `ami`                  | The AMI ID for the EC2 instance.                  | `"ami-0d1b5a8c13042c939"` (Amazon Linux 2) |
+| `instance_type`        | The EC2 instance type.                            | `"t2.micro"`                                |
+| `public_subnet_cidrs`  | CIDR blocks for public subnets.                   | `["10.0.1.0/24", ...]`                      |
+| `private_subnet_cidrs` | CIDR blocks for private subnets.                  | `["10.0.4.0/24", ...]`                      |
+| `azs`                  | Availability Zones for subnets.                   | `["us-east-2a", ...]`                       |
+| `key_name`             | The name of your EC2 Key Pair for SSH.            | `"terraform-key"`                           |
 
-### Outputs (`outputs.tf`)
+## Outputs
 
-After a successful deployment, Terraform will output the following information:
+After deployment, Terraform will display the following outputs:
 
 | Output              | Description                               |
 | ------------------- | ----------------------------------------- |
 | `instance_public_ip`  | The public IP address of the EC2 instance. |
 | `instance_public_dns` | The public DNS name of the EC2 instance.  |
+
+## Destroying the Infrastructure
+
+To remove all the resources created by this Terraform configuration, run the following command:
+
+```bash
+terraform destroy
+```
